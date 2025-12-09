@@ -1,9 +1,10 @@
-import { getBearerToken, validateJWT } from "../auth";
-import { respondWithJSON } from "./json";
-import { getVideo } from "../db/videos";
-import type { ApiConfig } from "../config";
-import type { BunRequest } from "bun";
-import { BadRequestError, NotFoundError } from "./errors";
+import { getBearerToken, validateJWT } from '../auth';
+import { respondWithJSON } from './json';
+import { getVideo, updateVideo } from '../db/videos';
+import type { ApiConfig } from '../config';
+import type { BunRequest } from 'bun';
+import { BadRequestError, NotFoundError, UserForbiddenError } from './errors';
+import { get } from 'http';
 
 type Thumbnail = {
   data: ArrayBuffer;
@@ -15,7 +16,7 @@ const videoThumbnails: Map<string, Thumbnail> = new Map();
 export async function handlerGetThumbnail(cfg: ApiConfig, req: BunRequest) {
   const { videoId } = req.params as { videoId?: string };
   if (!videoId) {
-    throw new BadRequestError("Invalid video ID");
+    throw new BadRequestError('Invalid video ID');
   }
 
   const video = getVideo(cfg.db, videoId);
@@ -25,13 +26,13 @@ export async function handlerGetThumbnail(cfg: ApiConfig, req: BunRequest) {
 
   const thumbnail = videoThumbnails.get(videoId);
   if (!thumbnail) {
-    throw new NotFoundError("Thumbnail not found");
+    throw new NotFoundError('Thumbnail not found');
   }
 
   return new Response(thumbnail.data, {
     headers: {
-      "Content-Type": thumbnail.mediaType,
-      "Cache-Control": "no-store",
+      'Content-Type': thumbnail.mediaType,
+      'Cache-Control': 'no-store',
     },
   });
 }
@@ -39,15 +40,44 @@ export async function handlerGetThumbnail(cfg: ApiConfig, req: BunRequest) {
 export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   const { videoId } = req.params as { videoId?: string };
   if (!videoId) {
-    throw new BadRequestError("Invalid video ID");
+    throw new BadRequestError('Invalid video ID');
   }
 
   const token = getBearerToken(req.headers);
   const userID = validateJWT(token, cfg.jwtSecret);
 
-  console.log("uploading thumbnail for video", videoId, "by user", userID);
+  console.log('uploading thumbnail for video', videoId, 'by user', userID);
 
-  // TODO: implement the upload here
+  const formData = await req.formData();
+  const file = formData.get('thumbnail');
+  if (!(file instanceof File)) {
+    throw new BadRequestError('Thumbnail file missing');
+  }
 
-  return respondWithJSON(200, null);
+  const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 10 MB
+  if (file.size > MAX_UPLOAD_SIZE) {
+    throw new BadRequestError('Thumbnail file too large');
+  }
+
+  const mediaType = file.type;
+  const data = await file.arrayBuffer();
+
+  const metadata = getVideo(cfg.db, videoId);
+  if (!metadata) {
+    throw new NotFoundError("Couldn't find video");
+  }
+  if (metadata.userID !== userID) {
+    throw new UserForbiddenError('You are not the uploader of this video');
+  }
+
+  videoThumbnails.set(videoId, { data, mediaType });
+
+  const videoURL = `http://localhost:${cfg.port}/api/thumbnails/${videoId}`;
+
+  metadata.thumbnailURL = videoURL;
+  // Update video metadata in the database
+
+  updateVideo(cfg.db, metadata);
+
+  return respondWithJSON(200, metadata);
 }
