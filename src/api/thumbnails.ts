@@ -1,10 +1,10 @@
 import { getBearerToken, validateJWT } from '../auth';
+import { getAssetDiskPath, getAssetURL, mediaTypeToExt } from './assets';
 import { respondWithJSON } from './json';
 import { getVideo, updateVideo } from '../db/videos';
 import type { ApiConfig } from '../config';
 import type { BunRequest } from 'bun';
 import { BadRequestError, NotFoundError, UserForbiddenError } from './errors';
-import path from 'path';
 
 export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   const { videoId } = req.params as { videoId?: string };
@@ -38,26 +38,18 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   }
 
   const mediaType = file.type;
-  if (!mediaType) {
-    throw new BadRequestError('Missing Content-Type for thumbnail');
+  if (mediaType !== 'image/jpeg' && mediaType !== 'image/png') {
+    throw new BadRequestError('Invalid file type. Only JPEG or PNG allowed.');
   }
 
-  const fileExtension = mediaType.split('/')[1];
-  if (!['jpeg', 'png'].includes(fileExtension)) {
-    throw new BadRequestError(
-      'Unsupported thumbnail format. Allowed formats: jpeg, png'
-    );
-  }
+  const ext = mediaTypeToExt(mediaType);
+  const filename = `${videoId}${ext}`;
 
-  const filePath = path.join(cfg.assetsRoot, `${videoId}.${fileExtension}`);
-  await Bun.write(filePath, file);
+  const assetDiskPath = getAssetDiskPath(cfg, filename);
+  await Bun.write(assetDiskPath, file);
 
-  const fileData = await file.arrayBuffer();
-  if (!fileData) {
-    throw new Error('Error reading file data');
-  }
-
-  video.thumbnailURL = `/assets/${videoId}.${fileExtension}`;
+  const urlPath = getAssetURL(cfg, filename);
+  video.thumbnailURL = urlPath;
   updateVideo(cfg.db, video);
 
   return respondWithJSON(200, video);
